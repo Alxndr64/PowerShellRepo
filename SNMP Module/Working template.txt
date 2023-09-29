@@ -1,0 +1,34 @@
+$Request = @{
+    UserName	= 'OrionAccount'
+    Target	= '172.23.34.47'
+    AuthType	= 'MD5'
+    AuthSecret	= 'Ori0nP@ssw0rd'
+    PrivType	= 'DES'
+    PrivSecret	= 'Ori0nP@ssw0rd'
+}
+
+# LLDP-MIB OIDs for Aruba switches
+$lldpLocalPortTable = '1.0.8802.1.1.2.1.3.7.1.2' # LLDP local port table
+$lldpLocSysName = '1.0.8802.1.1.2.1.3.7.1.4' # LLDP local system name
+$lldpRemChassisId = '1.0.8802.1.1.2.1.4.1.1.5' # LLDP remote chassis ID
+$lldpRemPortDesc = '1.0.8802.1.1.2.1.4.1.1.7' # LLDP remote port description
+
+# Perform an SNMP walk to retrieve LLDP information
+$lldpInfo = Invoke-SNMPv3Walk -OID $lldpLocalPortTable @Request
+
+foreach ($entry in $lldpInfo) {
+    $Interface = $entry.OID.Split('.')[-1]
+    $ChassisIdOID = "$lldpRemChassisId.$Interface"
+    $PortDescOID = "$lldpRemPortDesc.$Interface"
+
+    $ChassisId = Invoke-SNMPv3Get -OID $ChassisIdOID @Request
+    $PortDesc = Invoke-SNMPv3Get -OID $PortDescOID @Request
+
+    $LocalSysName = Invoke-SNMPv3Get -OID $lldpLocSysName @Request
+
+    Write-Host "Interface: $Interface"
+    Write-Host "Remote Chassis ID: $($ChassisId.Value)"
+    Write-Host "Remote Port Description: $($PortDesc.Value)"
+    Write-Host "Local System Name: $($LocalSysName.Value)"
+    Write-Host ""
+}

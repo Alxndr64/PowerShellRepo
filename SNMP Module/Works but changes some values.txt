@@ -1,0 +1,105 @@
+function Invoke-SNMPv3Walk
+{
+    [CmdletBinding()]
+    [OutputType('SNMPv3Output')]
+    param(
+        [Parameter(Mandatory=$true)]
+        [String]$UserName,
+
+        [Parameter(Mandatory=$true)]
+        [String]$Target,
+
+        [Parameter(Mandatory=$true)]
+        [String]$OID,
+
+        [Parameter(Mandatory=$false)]
+        [SNMPv3AuthType]$AuthType = 'None',
+
+        [Parameter(Mandatory=$false)]
+        [String]$AuthSecret,
+
+        [Parameter(Mandatory=$false)]
+        [SNMPv3PrivType]$PrivType = 'None',
+
+        [Parameter(Mandatory=$false)]
+        [String]$PrivSecret,
+
+        [Parameter(Mandatory=$false)]
+        [String]$Context,
+
+        [Parameter(Mandatory=$false)]
+        [int]$Port = 161,
+
+        [Parameter(Mandatory=$false)]
+        [int]$Timeout = 3000,
+
+        [switch]$NoFullRange
+    )
+
+    if ($NoFullRange.IsPresent) {
+        [Lextm.SharpSnmpLib.Messaging.Messenger]::UseFullRange = $false
+    } else {
+        [Lextm.SharpSnmpLib.Messaging.Messenger]::UseFullRange = $true
+    }
+
+    $SecurityLevel = Get-SNMPv3SecurityLevel $AuthType $AuthSecret $PrivType $PrivSecret
+
+    if ($SecurityLevel.IsValid)
+    {
+        $Authentication = Get-SNMPv3AuthenticationProvider $AuthType $AuthSecret
+        $Privacy = Get-SNMPv3PrivacyProvider $PrivType $PrivSecret $Authentication
+    }
+    else
+    {
+        $InvalidSecurityLevel = [System.FormatException]::new('Invalid security level provided')
+        Throw $InvalidSecurityLevel
+    }
+
+    $Context = if ([String]::IsNullOrWhiteSpace($Context)) {[String]::Empty} else {$Context}
+
+    $IPAddress = [ipaddress]::None
+    if ([ipaddress]::TryParse($Target, [ref]$IPAddress) -eq $false) {
+        $IPAddress  = [System.Net.Dns]::GetHostEntry($Target).AddressList[0]
+    }
+
+    $IPEndPoint = [System.Net.IPEndPoint]::new($IPAddress, $Port)
+
+    $Discovery = [Lextm.SharpSnmpLib.Messaging.Messenger]::GetNextDiscovery([Lextm.SharpSnmpLib.SnmpType]::GetBulkRequestPdu)
+    $Report = $Discovery.GetResponse($Timeout, $IPEndPoint)
+
+    $Result = [System.Collections.Generic.List[Lextm.SharpSnmpLib.Variable]]::new()
+
+    [Lextm.SharpSnmpLib.Messaging.Messenger]::BulkWalk(
+        [Lextm.SharpSnmpLib.VersionCode]::V3,
+        $IPEndPoint,
+        [Lextm.SharpSnmpLib.OctetString]::new($UserName),
+        [Lextm.SharpSnmpLib.OctetString]::new($Context),
+        [Lextm.SharpSnmpLib.ObjectIdentifier]::new($OID),
+        $Result,
+        $Timeout,
+        10,
+        [Lextm.SharpSnmpLib.Messaging.WalkMode]::WithinSubtree,
+        $Privacy,
+        $Report
+    ) | Out-Null
+
+    $Result | ForEach-Object {
+        $value = $_.Data
+        # Check if the value contains any character that isn't a letter, number, or hyphen
+        if ($value -match '[^A-Za-z0-9\-]') {
+            # Convert the entire value to hex
+            $hexValue = $value | ForEach-Object {
+                [BitConverter]::ToString([System.Text.Encoding]::ASCII.GetBytes($_)) -replace '-'
+            }
+            $value = $hexValue
+        }
+
+        [PSCustomObject] @{
+            PSTypeName = 'SNMPv3Output'
+            Node       = $IPAddress
+            OID        = $_.Id.ToString()
+            Type       = $_.Data.TypeCode
+            Value      = $value
+        }
+    }
+}
